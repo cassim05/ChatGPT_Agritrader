@@ -1,0 +1,145 @@
+name: Playwright E2E Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  schedule:
+    # Daily smoke run at 06:00 UTC
+    - cron: '0 6 * * *'
+    # Daily full run at 02:00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Playwright suite to run'
+        required: true
+        default: smoke
+        type: choice
+        options:
+          - smoke
+          - full
+          - soak
+      soak_hours:
+        description: 'Soak duration in hours; used only when suite=soak'
+        required: false
+        default: '1'
+
+env:
+  E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
+  E2E_SECRET: ${{ secrets.E2E_SECRET }}
+  E2E_SUPABASE_URL: ${{ secrets.E2E_SUPABASE_URL }}
+  E2E_SUPABASE_ANON_KEY: ${{ secrets.E2E_SUPABASE_ANON_KEY }}
+  E2E_DEFAULT_PASSWORD: ${{ secrets.E2E_DEFAULT_PASSWORD }}
+  E2E_SUPERADMIN_EMAIL: ${{ secrets.E2E_SUPERADMIN_EMAIL }}
+  E2E_SUPERADMIN_PASSWORD: ${{ secrets.E2E_SUPERADMIN_PASSWORD }}
+  E2E_ADMIN_EMAIL: ${{ secrets.E2E_ADMIN_EMAIL }}
+  E2E_ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
+  E2E_SUPPORT_EMAIL: ${{ secrets.E2E_SUPPORT_EMAIL }}
+  E2E_SUPPORT_PASSWORD: ${{ secrets.E2E_SUPPORT_PASSWORD }}
+  E2E_AUDITOR_EMAIL: ${{ secrets.E2E_AUDITOR_EMAIL }}
+  E2E_AUDITOR_PASSWORD: ${{ secrets.E2E_AUDITOR_PASSWORD }}
+  E2E_SELLER_EMAIL: ${{ secrets.E2E_SELLER_EMAIL }}
+  E2E_SELLER_PASSWORD: ${{ secrets.E2E_SELLER_PASSWORD }}
+  E2E_BUYER_EMAIL: ${{ secrets.E2E_BUYER_EMAIL }}
+  E2E_BUYER_PASSWORD: ${{ secrets.E2E_BUYER_PASSWORD }}
+  E2E_SELLER: ${{ secrets.E2E_SELLER }}
+  E2E_BUYER: ${{ secrets.E2E_BUYER }}
+  E2E_ORG: ${{ secrets.E2E_ORG }}
+  E2E_ADOPTER: ${{ secrets.E2E_ADOPTER }}
+
+jobs:
+  preflight:
+    name: Lint and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint --if-present
+
+      - name: Build
+        run: npm run build --if-present
+
+  e2e:
+    name: Playwright ${{ github.event_name == 'workflow_dispatch' && inputs.suite || github.event_name == 'pull_request' && 'smoke' || github.event_name == 'push' && 'full' || github.event.schedule == '0 6 * * *' && 'smoke' || 'full' }}
+    runs-on: ubuntu-latest
+    needs: preflight
+    timeout-minutes: 90
+    env:
+      SOAK_HOURS: ${{ inputs.soak_hours || '1' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Run PR smoke suite
+        if: github.event_name == 'pull_request'
+        run: npx playwright test --config=playwright.config.ts --grep @smoke
+
+      - name: Run main full suite
+        if: github.event_name == 'push'
+        run: npx playwright test --config=playwright.config.ts --grep @full
+
+      - name: Run scheduled smoke suite
+        if: github.event_name == 'schedule' && github.event.schedule == '0 6 * * *'
+        run: npx playwright test --config=playwright.config.ts --grep @smoke
+
+      - name: Run scheduled full suite
+        if: github.event_name == 'schedule' && github.event.schedule == '0 2 * * *'
+        run: npx playwright test --config=playwright.config.ts --grep @full
+
+      - name: Run manual smoke suite
+        if: github.event_name == 'workflow_dispatch' && inputs.suite == 'smoke'
+        run: npx playwright test --config=playwright.config.ts --grep @smoke
+
+      - name: Run manual full suite
+        if: github.event_name == 'workflow_dispatch' && inputs.suite == 'full'
+        run: npx playwright test --config=playwright.config.ts --grep @full
+
+      - name: Run manual soak suite
+        if: github.event_name == 'workflow_dispatch' && inputs.suite == 'soak'
+        run: npx playwright test --config=playwright.config.ts --grep @soak
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload Playwright test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
